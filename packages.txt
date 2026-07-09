@@ -1,0 +1,3 @@
+libgles2-mesa
+libgomp1
+libglib2.0-0
