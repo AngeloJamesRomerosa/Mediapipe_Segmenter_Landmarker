@@ -1,3 +1,7 @@
+# NOTE: This file is unused in the current client-side inference build.
+# To restore server-side inference, instantiate Session per WebSocket connection
+# in main.py and pass it through _process_frame and apply_bg.
+
 """Per-connection session state."""
 
 from __future__ import annotations

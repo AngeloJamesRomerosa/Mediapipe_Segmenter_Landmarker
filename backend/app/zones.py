@@ -1,3 +1,6 @@
+# NOTE: This file is unused in the current client-side inference build.
+# Used by composite.py to build per-body-part zone masks. Requires numpy and opencv.
+
 """Body-zone mask computation: per-part smoothed masks merged into one alpha."""
 
 from __future__ import annotations

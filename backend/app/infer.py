@@ -1,3 +1,7 @@
+# NOTE: This file is unused in the current client-side inference build.
+# To restore server-side inference, these result processors are called from
+# loops.py callbacks. Requires mediapipe and numpy.
+
 """Per-model result processors for LIVE_STREAM mode.
 
 detect_async() is called from the loop thread; results arrive via a callback

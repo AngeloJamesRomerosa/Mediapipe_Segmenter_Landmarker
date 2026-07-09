@@ -1,3 +1,6 @@
+# NOTE: This file is unused in the current client-side inference build.
+# Used by composite.py to build background layers (blur, solid, custom image). Requires opencv.
+
 """Background layer builder: blur, solid colors, and custom image upload."""
 
 from typing import Any

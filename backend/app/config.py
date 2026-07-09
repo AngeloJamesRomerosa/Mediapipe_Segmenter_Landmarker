@@ -1,3 +1,6 @@
+# NOTE: This file is unused in the current client-side inference build.
+# Contains model URLs/paths, landmark tables, and body-part config for server-side inference.
+
 """Constants, landmark index tables, body-part configuration, and model paths."""
 
 import os

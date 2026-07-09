@@ -1,3 +1,6 @@
+# NOTE: This file is unused in the current client-side inference build.
+# Used by composite.py for server-side alpha mask construction. Requires numpy.
+
 """Alpha mask builders: segmenter smoothing, hand mask, face+hair mask."""
 
 from typing import Any

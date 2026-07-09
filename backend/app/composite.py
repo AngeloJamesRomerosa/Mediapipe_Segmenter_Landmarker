@@ -1,3 +1,7 @@
+# NOTE: This file is unused in the current client-side inference build.
+# To restore server-side inference, re-import apply_bg() in main.py and
+# call it inside _process_frame. Requires mediapipe, opencv, and numpy.
+
 """Composite math and the main per-frame entry point (apply_bg).
 
 All models (segmenter, pose, hand, face) run in per-session background threads
