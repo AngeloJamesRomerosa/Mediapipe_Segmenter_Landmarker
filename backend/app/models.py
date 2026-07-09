@@ -83,7 +83,10 @@ def create_pose_landmarker_live(callback: Callable) -> Any:
     try:
         return _mp_vision.PoseLandmarker.create_from_options(
             _mp_vision.PoseLandmarkerOptions(
-                base_options=_mp_tasks.BaseOptions(model_asset_path=POSE_PATH),
+                base_options=_mp_tasks.BaseOptions(
+                    model_asset_path=POSE_PATH,
+                    delegate=_mp_tasks.BaseOptions.Delegate.CPU,
+                ),
                 running_mode=_mp_vision.RunningMode.LIVE_STREAM,
                 num_poses=1,
                 min_pose_detection_confidence=0.5,
@@ -104,7 +107,10 @@ def create_hand_landmarker_live(callback: Callable) -> Any:
     try:
         return _mp_vision.HandLandmarker.create_from_options(
             _mp_vision.HandLandmarkerOptions(
-                base_options=_mp_tasks.BaseOptions(model_asset_path=HAND_PATH),
+                base_options=_mp_tasks.BaseOptions(
+                    model_asset_path=HAND_PATH,
+                    delegate=_mp_tasks.BaseOptions.Delegate.CPU,
+                ),
                 running_mode=_mp_vision.RunningMode.LIVE_STREAM,
                 num_hands=2,
                 min_hand_detection_confidence=0.5,
@@ -124,7 +130,10 @@ def create_face_landmarker_live(callback: Callable) -> Any:
     try:
         return _mp_vision.FaceLandmarker.create_from_options(
             _mp_vision.FaceLandmarkerOptions(
-                base_options=_mp_tasks.BaseOptions(model_asset_path=FACE_PATH),
+                base_options=_mp_tasks.BaseOptions(
+                    model_asset_path=FACE_PATH,
+                    delegate=_mp_tasks.BaseOptions.Delegate.CPU,
+                ),
                 running_mode=_mp_vision.RunningMode.LIVE_STREAM,
                 num_faces=1,
                 min_face_detection_confidence=0.5,
@@ -148,7 +157,10 @@ def get_segmenter() -> Any:
                 SEG_URL, SEG_PATH, "Selfie segmenter",
                 lambda: _mp_vision.ImageSegmenter.create_from_options(
                     _mp_vision.ImageSegmenterOptions(
-                        base_options=_mp_tasks.BaseOptions(model_asset_path=SEG_PATH),
+                        base_options=_mp_tasks.BaseOptions(
+                            model_asset_path=SEG_PATH,
+                            delegate=_mp_tasks.BaseOptions.Delegate.CPU,
+                        ),
                         running_mode=_mp_vision.RunningMode.IMAGE,
                         output_confidence_masks=True,
                     )
