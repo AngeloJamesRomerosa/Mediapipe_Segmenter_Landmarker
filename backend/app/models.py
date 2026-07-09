@@ -1,3 +1,7 @@
+# NOTE: This file is unused in the current client-side inference build.
+# To restore server-side inference, re-import this in main.py and wire it
+# back into loops.py. Requires mediapipe and numpy in requirements.txt.
+
 """MediaPipe model singletons and thread pools.
 
 All models use IMAGE running mode (stateless, thread-safe singletons).

@@ -127,3 +127,45 @@ Get-Process -Name "python*" -ErrorAction SilentlyContinue | Stop-Process -Force
 | `face_landmarker.task` | 478 face landmarks | ~14 MB |
 
 All four load in parallel via `Promise.all` when you click **Start** for the first time.
+
+---
+
+## Switching to server-side inference
+
+The backend Python files (`models.py`, `loops.py`, `infer.py`, `composite.py`, `alpha.py`, `zones.py`, `build.py`, `session.py`, `config.py`) are preserved but unused in the current build. They contain a fully working server-side MediaPipe pipeline using LIVE_STREAM mode with `detect_async()`.
+
+To restore server-side inference:
+
+**1. Restore requirements**
+
+In `backend/requirements.txt`, add back:
+```
+mediapipe>=0.10.0
+opencv-python-headless>=4.8.0
+numpy>=1.24.0,<2.0
+```
+
+**2. Restore main.py**
+
+Re-add the WebSocket endpoint and frame processing. The old pipeline in `main.py` (preserved in the `working_prototype_1` branch):
+- Accepts binary JPEG frames from the browser over WebSocket
+- Calls `apply_bg()` from `composite.py` which reads from the per-session inference loops
+- Returns a composited JPEG binary back to the browser
+- Pushes landmark JSON directly from inference callbacks via `_push_landmarks()`
+
+**3. Restore app.js**
+
+Replace the current ES module / client-side inference version with the WebSocket-based version from the `working_prototype_1` branch. That version:
+- Captures frames via `setInterval` → `toBlob` → `ws.send(buf)`
+- Receives binary frames and draws them on Panel 3
+- Receives landmark JSON and smooths/draws them on Panel 2
+
+**4. Remove the `type="module"` attribute** from the `<script>` tag in `index.html`
+
+**Reference branches**
+
+| Branch | Description |
+|--------|-------------|
+| `working_prototype_1` | Last working server-side inference version |
+| `client_side_inference` | Snapshot of the client-side JS migration |
+| `main` / `development` | Current client-side build |

@@ -1,3 +1,7 @@
+# NOTE: This file is unused in the current client-side inference build.
+# To restore server-side inference, re-import this in main.py and call
+# loops.submit() from _process_frame. Requires mediapipe and numpy.
+
 """Per-session background inference loops: segmenter, pose, hand, and face.
 
 Pose / hand / face landmarkers run in LIVE_STREAM mode:
