@@ -1,5 +1,13 @@
 "use strict";
 
+import {
+  FilesetResolver,
+  ImageSegmenter,
+  PoseLandmarker,
+  HandLandmarker,
+  FaceLandmarker,
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
 // ── Landmark connection tables ────────────────────────────────────────────────
 
 const POSE_CONNECTIONS = [
@@ -24,8 +32,6 @@ const FACE_OVAL_IDX = [
   397,365,379,378,400,377,152,148,176,149,150,136,
   172,58,132,93,234,127,162,21,54,103,67,109,
 ];
-
-// Inner face contours (MediaPipe face mesh indices)
 const FACE_RIGHT_EYE  = [33,246,161,160,159,158,157,173,133,155,154,153,145,144,163,7];
 const FACE_LEFT_EYE   = [362,382,381,380,374,373,390,249,263,466,388,387,386,385,384,398];
 const FACE_RIGHT_BROW = [46,53,52,65,55,70,63,105,66,107];
@@ -34,60 +40,68 @@ const FACE_NOSE_RIDGE = [168,6,197,195,5,4];
 const FACE_LIPS_OUTER = [61,146,91,181,84,17,314,405,321,375,291,308,324,318,402,317,14,87,178,88,95];
 
 // ── Per-landmark smoothing sigmas ─────────────────────────────────────────────
-// alpha = exp(-d²/sigma) per rAF tick. Smaller sigma → snappier (arms/feet).
-// Larger sigma → more stable (face/shoulders/hips).
 
 const POSE_SIGMA = (() => {
   const s = new Float32Array(33).fill(5e-4);
-  for (let i = 0; i <= 10; i++) s[i] = 8e-4;   // face landmarks — stable
-  s[11] = s[12] = 7e-4;                          // shoulders
-  s[13] = s[14] = 3e-4;                          // elbows — responsive
-  for (let i = 15; i <= 22; i++) s[i] = 2e-4;   // wrists + hand tips
-  s[23] = s[24] = 7e-4;                          // hips — stable
-  s[25] = s[26] = 5e-4;                          // knees
-  s[27] = s[28] = 3e-4;                          // ankles
-  for (let i = 29; i <= 32; i++) s[i] = 1.5e-4; // feet — most responsive
+  for (let i = 0; i <= 10; i++) s[i] = 8e-4;
+  s[11] = s[12] = 7e-4;
+  s[13] = s[14] = 3e-4;
+  for (let i = 15; i <= 22; i++) s[i] = 2e-4;
+  s[23] = s[24] = 7e-4;
+  s[25] = s[26] = 5e-4;
+  s[27] = s[28] = 3e-4;
+  for (let i = 29; i <= 32; i++) s[i] = 1.5e-4;
   return s;
 })();
-const HAND_SIGMA = 1.5e-4;  // hands snap to fresh detection quickly
-const FACE_SIGMA = 8e-4;    // face mesh stays stable
+const HAND_SIGMA = 1.5e-4;
+const FACE_SIGMA = 8e-4;
+
+// ── Model CDN paths ───────────────────────────────────────────────────────────
+
+const MP_BASE   = "https://storage.googleapis.com/mediapipe-models";
+const WASM_PATH = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const SEG_MODEL  = `${MP_BASE}/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite`;
+const POSE_MODEL = `${MP_BASE}/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task`;
+const HAND_MODEL = `${MP_BASE}/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task`;
+const FACE_MODEL = `${MP_BASE}/face_landmarker/face_landmarker/float16/latest/face_landmarker.task`;
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
 class App {
   constructor() {
-    // Panel 1 — raw video element
-    this._video = document.getElementById("camera");
-
-    // Panel 2 — camera frame + landmark skeleton (requestAnimationFrame)
-    this._lmCanvas = document.getElementById("landmarks");
-    this._lmCtx    = this._lmCanvas.getContext("2d");
-
-    // Panel 3 — server-composited frame
+    this._video     = document.getElementById("camera");
+    this._lmCanvas  = document.getElementById("landmarks");
+    this._lmCtx     = this._lmCanvas.getContext("2d");
     this._outCanvas = document.getElementById("output");
     this._outCtx    = this._outCanvas.getContext("2d");
 
-    // Off-screen canvas for JPEG capture
-    this._capture = document.createElement("canvas");
-    this._capCtx  = this._capture.getContext("2d");
+    // Off-screen canvas for mask compositing — willReadFrequently for getImageData perf
+    this._maskCanvas        = document.createElement("canvas");
+    this._maskCtx           = this._maskCanvas.getContext("2d", { willReadFrequently: true });
 
-    this._ws           = null;
-    this._connected    = false;
-    this._running      = false;   // false = stopped, true = active
-    this._captureTimer = null;
-    this._rafActive    = false;   // tracks whether the rAF loop is alive
+    this._running     = false;
+    this._modelsReady = false;
+    this._loopActive  = false;
 
-    // FPS counter (Panel 3)
+    // MediaPipe models
+    this._segmenter      = null;
+    this._poseLandmarker = null;
+    this._handLandmarker = null;
+    this._faceLandmarker = null;
+
+    // Latest segmentation mask data (Float32Array, length = W*H)
+    this._latestMask = null;
+
+    // Landmark targets + smoothed display state
+    this._landmarks        = null;
+    this._displayLandmarks = null;
+
+    // Background image (loaded from file picker)
+    this._bgImage = null;
+
+    // FPS counter
     this._frameCount  = 0;
     this._fpsLastTime = Date.now();
-
-    // Latency tracking: time when last frame binary was sent
-    this._frameSentAt = null;
-    this._latencyEma  = null;   // exponential moving average for smooth display
-
-    // Smoothed landmarks for Panel 2 — interpolated toward server target each rAF tick
-    this._displayLandmarks = null;  // what is actually drawn (smoothed)
-    this._landmarks        = null;  // latest target from server
 
     this._settings = {
       preset:          "none",
@@ -96,13 +110,13 @@ class App {
       face:            false,
       outline:         false,
       outlineStrength: 0.5,
-      fpsCap:          30,       // 0 = MAX (uncapped)
+      fpsCap:          30,
     };
 
     this._bindUI();
   }
 
-  // ── Start / Stop ──────────────────────────────────────────────────────────────
+  // ── Start / Stop ──────────────────────────────────────────────────────────
 
   start() {
     if (this._running) return;
@@ -118,37 +132,20 @@ class App {
     this._setStatus("Stopped", false);
     document.getElementById("fps-display").textContent     = "— fps";
     document.getElementById("latency-display").textContent = "— ms";
-    this._frameSentAt = null;
-    this._latencyEma  = null;
 
-    // Stop frame capture interval
-    if (this._captureTimer) {
-      clearInterval(this._captureTimer);
-      this._captureTimer = null;
-    }
-
-    // Close WebSocket without auto-reconnect
-    if (this._ws) {
-      this._ws.onclose = null;
-      this._ws.close();
-      this._ws = null;
-    }
-    this._connected = false;
-
-    // Turn off camera
     if (this._video.srcObject) {
       this._video.srcObject.getTracks().forEach(t => t.stop());
       this._video.srcObject = null;
     }
 
-    // Clear canvases
     this._lmCtx.clearRect(0, 0, this._lmCanvas.width, this._lmCanvas.height);
     this._outCtx.clearRect(0, 0, this._outCanvas.width, this._outCanvas.height);
     this._landmarks        = null;
     this._displayLandmarks = null;
+    this._latestMask       = null;
   }
 
-  // ── Camera init ───────────────────────────────────────────────────────────────
+  // ── Camera init ───────────────────────────────────────────────────────────
 
   async _initCamera() {
     this._setStatus("Starting camera…", false);
@@ -165,16 +162,14 @@ class App {
       const W = this._video.videoWidth  || 640;
       const H = this._video.videoHeight || 480;
 
-      this._capture.width   = W;
-      this._capture.height  = H;
-      this._lmCanvas.width  = W;
-      this._lmCanvas.height = H;
-      this._outCanvas.width  = W;
-      this._outCanvas.height = H;
+      this._lmCanvas.width   = W;  this._lmCanvas.height  = H;
+      this._outCanvas.width  = W;  this._outCanvas.height = H;
+      this._maskCanvas.width = W;  this._maskCanvas.height = H;
 
-      this._connect();
-      this._startCapture();
-      this._startLandmarksLoop();
+      if (!this._modelsReady) await this._initModels();
+      if (!this._running) return;
+
+      this._startLoop();
     } catch (err) {
       this._running = false;
       this._setBtn("start");
@@ -182,90 +177,189 @@ class App {
     }
   }
 
-  // ── WebSocket ─────────────────────────────────────────────────────────────────
+  // ── Model initialization ──────────────────────────────────────────────────
 
-  _connect() {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    this._ws = new WebSocket(`${proto}//${location.host}/ws`);
-    this._ws.binaryType = "arraybuffer";
+  async _initModels() {
+    this._setStatus("Loading models…", false);
+    try {
+      const vision = await FilesetResolver.forVisionTasks(WASM_PATH);
 
-    this._ws.onopen = () => {
-      this._connected = true;
-      this._setStatus("Connected", true);
-      // Sync settings to the new session
-      this._send({ type: "toggle", feature: "pose",    value: this._settings.pose });
-      this._send({ type: "toggle", feature: "hand",    value: this._settings.hand });
-      this._send({ type: "toggle", feature: "face",    value: this._settings.face });
-      this._send({ type: "toggle", feature: "outline", value: this._settings.outline });
-      this._send({ type: "outline_strength",           value: this._settings.outlineStrength });
-      this._send({ type: "preset",  preset: this._settings.preset });
-      this._send({ type: "fps_cap", fps:    this._settings.fpsCap });
-    };
+      [this._segmenter, this._poseLandmarker, this._handLandmarker, this._faceLandmarker] =
+        await Promise.all([
+          ImageSegmenter.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: SEG_MODEL,  delegate: "GPU" },
+            runningMode: "VIDEO",
+            outputConfidenceMasks: true,
+          }),
+          PoseLandmarker.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: POSE_MODEL, delegate: "GPU" },
+            runningMode: "VIDEO",
+            numPoses: 1,
+            minPoseDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5,
+          }),
+          HandLandmarker.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: HAND_MODEL, delegate: "GPU" },
+            runningMode: "VIDEO",
+            numHands: 2,
+            minHandDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5,
+          }),
+          FaceLandmarker.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: FACE_MODEL, delegate: "GPU" },
+            runningMode: "VIDEO",
+            numFaces: 1,
+            minFaceDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5,
+          }),
+        ]);
 
-    this._ws.onclose = () => {
-      this._connected = false;
-      if (!this._running) return; // stopped by user — don't reconnect
-      this._setStatus("Reconnecting…", false);
-      setTimeout(() => { if (this._running) this._connect(); }, 3000);
-    };
-
-    this._ws.onerror = () => { /* onclose fires next */ };
-
-    this._ws.onmessage = (evt) => {
-      if (evt.data instanceof ArrayBuffer) {
-        this._renderOutputFrame(evt.data);   // Panel 3
-      } else {
-        try {
-          const msg = JSON.parse(evt.data);
-          if (msg.type === "landmarks") this._landmarks = msg;
-        } catch (_) { /* ignore */ }
-      }
-    };
+      this._modelsReady = true;
+      this._setStatus("Ready", true);
+    } catch (err) {
+      this._setStatus(`Model load failed: ${err.message}`, false);
+      throw err;
+    }
   }
 
-  // ── Frame capture & send ──────────────────────────────────────────────────────
+  // ── Main loop ─────────────────────────────────────────────────────────────
+  // Panel 2 (landmarks) redraws every rAF tick for smooth display.
+  // Inference + Panel 3 compositing runs at the capped FPS.
 
-  _startCapture() {
-    const fps = this._settings.fpsCap;
-    const ms  = fps === 0 ? 1000 / 60 : 1000 / fps;
-    this._captureTimer = setInterval(() => {
-      if (!this._connected || this._ws.bufferedAmount > 60_000) return;
-      this._capCtx.drawImage(this._video, 0, 0);
-      this._capture.toBlob((blob) => {
-        if (!blob || !this._connected) return;
-        blob.arrayBuffer().then((buf) => {
-          if (this._ws?.readyState === WebSocket.OPEN) {
-            this._frameSentAt = Date.now();
-            this._ws.send(buf);
-          }
-        });
-      }, "image/jpeg", 0.8);
-    }, ms);
-  }
+  _startLoop() {
+    if (this._loopActive) return;
+    this._loopActive = true;
+    let lastInferTime = 0;
 
-  // ── Panel 2: landmark loop (requestAnimationFrame) ────────────────────────────
+    const tick = (now) => {
+      if (!this._running) { this._loopActive = false; return; }
 
-  _startLandmarksLoop() {
-    if (this._rafActive) return;
-    this._rafActive = true;
-    const tick = () => {
-      if (!this._running) { this._rafActive = false; return; }
       const W = this._lmCanvas.width;
       const H = this._lmCanvas.height;
+
+      // Panel 2: video frame + smoothed landmarks every rAF tick
       this._lmCtx.drawImage(this._video, 0, 0, W, H);
       if (this._landmarks) {
         this._displayLandmarks = this._smoothLandmarks(this._displayLandmarks, this._landmarks);
         this._drawLandmarks(this._lmCtx, W, H, this._displayLandmarks);
       }
+
+      // Inference + Panel 3 at capped FPS
+      const interval = this._settings.fpsCap === 0 ? 0 : 1000 / this._settings.fpsCap;
+      if (this._modelsReady && this._video.readyState >= 2 && now - lastInferTime >= interval) {
+        lastInferTime = now;
+        const t0 = performance.now();
+        this._runInference(now);
+        const inferMs = Math.round(performance.now() - t0);
+        document.getElementById("latency-display").textContent = `${inferMs}ms`;
+        this._countFps();
+      }
+
       requestAnimationFrame(tick);
     };
+
     requestAnimationFrame(tick);
   }
 
-  // ── Landmark smoothing (adaptive exponential blend) ───────────────────────────
-  // Technique from LearnOpenCV: alpha = exp(-d²/sigma) so small displacements
-  // heavily favour the smoothed (stable) position, large displacements favour
-  // the fresh detection (responsive). Applied per-landmark per rAF tick.
+  // ── Inference (runs all models synchronously on each inference tick) ───────
+
+  _runInference(timestamp) {
+    const needsSeg = this._settings.preset !== "none" || this._settings.outline;
+
+    // Segmenter
+    if (needsSeg) {
+      const r    = this._segmenter.segmentForVideo(this._video, timestamp);
+      const mask = r.confidenceMasks?.[0];
+      // Copy Float32Array — the underlying buffer may be reused on next inference call
+      this._latestMask = mask ? new Float32Array(mask.getAsFloat32Array()) : null;
+    } else {
+      this._latestMask = null;
+    }
+
+    // Pose
+    const pose = this._settings.pose
+      ? (this._poseLandmarker.detectForVideo(this._video, timestamp).landmarks?.[0] ?? null)
+      : null;
+
+    // Hand
+    const hands = this._settings.hand
+      ? (this._handLandmarker.detectForVideo(this._video, timestamp).landmarks ?? [])
+      : [];
+
+    // Face
+    const face = this._settings.face
+      ? (this._faceLandmarker.detectForVideo(this._video, timestamp).faceLandmarks?.[0] ?? null)
+      : null;
+
+    this._landmarks = { pose, hands, face };
+
+    // Panel 3: composite background using segmentation mask
+    this._compositeBg();
+  }
+
+  // ── Background compositing (Panel 3) ──────────────────────────────────────
+
+  _compositeBg() {
+    const W      = this._outCanvas.width;
+    const H      = this._outCanvas.height;
+    const ctx    = this._outCtx;
+    const preset = this._settings.preset;
+
+    // No background effect — just mirror the raw video
+    if (preset === "none" && !this._settings.outline) {
+      ctx.drawImage(this._video, 0, 0, W, H);
+      return;
+    }
+
+    // Draw background layer
+    if (preset === "blur") {
+      ctx.filter = "blur(20px) saturate(1.3)";
+      ctx.drawImage(this._video, -20, -20, W + 40, H + 40);
+      ctx.filter = "none";
+    } else if (preset === "black") {
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, W, H);
+    } else if (preset === "white") {
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, W, H);
+    } else if (preset === "green") {
+      ctx.fillStyle = "#00b140";
+      ctx.fillRect(0, 0, W, H);
+    } else if (preset === "image" && this._bgImage) {
+      ctx.drawImage(this._bgImage, 0, 0, W, H);
+    } else {
+      // Fallback: no mask yet, show plain video
+      ctx.drawImage(this._video, 0, 0, W, H);
+      return;
+    }
+
+    const mask = this._latestMask;
+    if (!mask || mask.length !== W * H) return;
+
+    // Draw current video frame to mask canvas, then set alpha from segmentation mask
+    this._maskCtx.drawImage(this._video, 0, 0, W, H);
+    const imgData = this._maskCtx.getImageData(0, 0, W, H);
+    const px = imgData.data;
+    for (let i = 0; i < W * H; i++) {
+      px[i * 4 + 3] = mask[i] * 255 | 0;
+    }
+    this._maskCtx.putImageData(imgData, 0, 0);
+
+    // Optional glow outline — draw blurred person silhouette before sharp composite
+    if (this._settings.outline) {
+      const blur = Math.round(this._settings.outlineStrength * 16 + 4);
+      ctx.save();
+      ctx.filter      = `blur(${blur}px)`;
+      ctx.globalAlpha = this._settings.outlineStrength * 0.9;
+      ctx.drawImage(this._maskCanvas, 0, 0);
+      ctx.restore();
+    }
+
+    // Composite sharp person over background
+    ctx.drawImage(this._maskCanvas, 0, 0);
+  }
+
+  // ── Landmark smoothing ────────────────────────────────────────────────────
 
   _smoothLandmarks(cur, tgt) {
     if (!cur) return tgt;
@@ -274,43 +368,19 @@ class App {
       if (!c) return t;
       const dx = t.x - c.x, dy = t.y - c.y;
       const alpha = Math.exp(-(dx * dx + dy * dy) / sigma);
-      return {
-        ...t,
-        x: t.x + alpha * (c.x - t.x),
-        y: t.y + alpha * (c.y - t.y),
-        z: t.z + alpha * (c.z - t.z),
-      };
+      return { ...t, x: t.x + alpha * (c.x - t.x), y: t.y + alpha * (c.y - t.y), z: t.z + alpha * (c.z - t.z) };
     };
 
-    const out = { type: "landmarks" };
-    if (tgt.pose)  out.pose  = tgt.pose.map((p, i) => smoothPt(cur.pose?.[i],      p, POSE_SIGMA[i] ?? 5e-4));
+    const out = {};
+    if (tgt.pose)  out.pose  = tgt.pose.map((p, i) => smoothPt(cur.pose?.[i],       p, POSE_SIGMA[i] ?? 5e-4));
     if (tgt.hands) out.hands = tgt.hands.map((h, hi) =>
-                                 h.map((p, i) => smoothPt(cur.hands?.[hi]?.[i],   p, HAND_SIGMA)));
-    if (tgt.face)  out.face  = tgt.face.map((p, i) => smoothPt(cur.face?.[i],      p, FACE_SIGMA));
+                                 h.map((p, i)  => smoothPt(cur.hands?.[hi]?.[i],    p, HAND_SIGMA)));
+    if (tgt.face)  out.face  = tgt.face.map((p, i) => smoothPt(cur.face?.[i],       p, FACE_SIGMA));
     return out;
   }
 
-  // ── Panel 3: server-composited frame ──────────────────────────────────────────
-
-  _renderOutputFrame(buf) {
-    const sentAt = this._frameSentAt;
-    const blob = new Blob([buf], { type: "image/jpeg" });
-    createImageBitmap(blob).then((bmp) => {
-      this._outCtx.drawImage(bmp, 0, 0, this._outCanvas.width, this._outCanvas.height);
-      bmp.close();
-      this._countFps();
-      if (sentAt !== null) {
-        const lat = Date.now() - sentAt;
-        this._latencyEma = this._latencyEma === null
-          ? lat
-          : this._latencyEma * 0.75 + lat * 0.25;
-        document.getElementById("latency-display").textContent =
-          `${Math.round(this._latencyEma)} ms`;
-      }
-    });
-  }
-
-  // ── Landmark drawing ──────────────────────────────────────────────────────────
+  // ── Landmark drawing ──────────────────────────────────────────────────────
+  // MediaPipe JS uses lm.visibility (float 0-1). Falls back to 1 if absent (hands/face).
 
   _drawLandmarks(ctx, W, H, lms) {
 
@@ -320,7 +390,7 @@ class App {
       ctx.lineWidth   = 2;
       for (const [a, b] of POSE_CONNECTIONS) {
         const la = lms.pose[a], lb = lms.pose[b];
-        if (la && lb && la.v > 0.3 && lb.v > 0.3) {
+        if (la && lb && (la.visibility ?? 1) > 0.3 && (lb.visibility ?? 1) > 0.3) {
           ctx.beginPath();
           ctx.moveTo(la.x * W, la.y * H);
           ctx.lineTo(lb.x * W, lb.y * H);
@@ -329,7 +399,7 @@ class App {
       }
       ctx.fillStyle = "#16a34a";
       for (const lm of lms.pose) {
-        if (lm.v > 0.3) {
+        if ((lm.visibility ?? 1) > 0.3) {
           ctx.beginPath();
           ctx.arc(lm.x * W, lm.y * H, 3.5, 0, Math.PI * 2);
           ctx.fill();
@@ -359,7 +429,7 @@ class App {
       }
     }
 
-    // Face — oval + inner contours + landmark dots
+    // Face — oval + inner contours + mesh dots
     if (lms.face?.length) {
       const f = lms.face;
       ctx.strokeStyle = "rgba(126,200,227,0.85)";
@@ -386,7 +456,6 @@ class App {
       drawPath(FACE_NOSE_RIDGE, false);
       drawPath(FACE_LIPS_OUTER, true);
 
-      // Small dot at every landmark so the full mesh is visible
       ctx.fillStyle = "rgba(126,200,227,0.7)";
       for (const lm of f) {
         ctx.beginPath();
@@ -396,7 +465,7 @@ class App {
     }
   }
 
-  // ── FPS counter ───────────────────────────────────────────────────────────────
+  // ── FPS counter ───────────────────────────────────────────────────────────
 
   _countFps() {
     this._frameCount++;
@@ -409,15 +478,11 @@ class App {
     }
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
-  _send(obj) {
-    if (this._ws?.readyState === WebSocket.OPEN) this._ws.send(JSON.stringify(obj));
-  }
-
-  _setStatus(text, connected) {
+  _setStatus(text, ready) {
     document.getElementById("status-text").textContent = text;
-    document.getElementById("status-dot").classList.toggle("connected", connected);
+    document.getElementById("status-dot").classList.toggle("connected", ready);
   }
 
   _setBtn(state) {
@@ -426,84 +491,68 @@ class App {
     btn.className   = state;
   }
 
-  // ── Public API (called from event handlers) ───────────────────────────────────
+  // ── Public API ────────────────────────────────────────────────────────────
 
   setPreset(preset) {
     this._settings.preset = preset;
-    this._send({ type: "preset", preset });
-    // Toggle active on regular preset buttons
-    document.querySelectorAll(".preset-btn[data-preset]").forEach((btn) => {
+    if (preset !== "image") this._bgImage = null;
+    document.querySelectorAll(".preset-btn[data-preset]").forEach(btn => {
       btn.classList.toggle("active", btn.dataset.preset === preset);
     });
-    // Toggle active on the Image label separately
     document.getElementById("img-preset-btn").classList.toggle("active", preset === "image");
   }
 
   toggleFeature(feature) {
     this._settings[feature] = !this._settings[feature];
-    this._send({ type: "toggle", feature, value: this._settings[feature] });
     document.getElementById(`chip-${feature}`).classList.toggle("on", this._settings[feature]);
   }
 
   setFpsCap(fps) {
     this._settings.fpsCap = fps;
-    this._send({ type: "fps_cap", fps });
-    document.querySelectorAll(".fps-btn").forEach((btn) => {
+    document.querySelectorAll(".fps-btn").forEach(btn => {
       btn.classList.toggle("active", parseInt(btn.dataset.fps) === fps);
     });
-    // Restart capture timer at new rate if running
-    if (this._captureTimer) {
-      clearInterval(this._captureTimer);
-      this._captureTimer = null;
-      this._startCapture();
-    }
   }
 
   setOutlineStrength(val) {
     const v = parseFloat(val);
     this._settings.outlineStrength = v;
-    this._send({ type: "outline_strength", value: v });
     document.getElementById("strength-val").textContent = v.toFixed(2);
   }
 
   uploadBgImage(file) {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      this._send({ type: "bg_image", data: e.target.result });
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      this._bgImage = img;
+      URL.revokeObjectURL(url);
       this.setPreset("image");
     };
-    reader.readAsDataURL(file);
+    img.src = url;
   }
 
-  // ── UI binding ────────────────────────────────────────────────────────────────
+  // ── UI binding ────────────────────────────────────────────────────────────
 
   _bindUI() {
-    // Start / Stop button
     document.getElementById("start-stop-btn").addEventListener("click", () => {
       this._running ? this.stop() : this.start();
     });
 
-    // Preset buttons (data-preset delegates; Image label handles itself via file input)
     document.getElementById("preset-row").addEventListener("click", (e) => {
       const btn = e.target.closest(".preset-btn[data-preset]");
       if (btn) this.setPreset(btn.dataset.preset);
     });
 
-    // Background image file picker
     document.getElementById("bg-file").addEventListener("change", (e) => {
       this.uploadBgImage(e.target.files?.[0]);
     });
 
-    // FPS cap buttons
     document.getElementById("fps-row").addEventListener("click", (e) => {
       const btn = e.target.closest(".fps-btn[data-fps]");
       if (btn) this.setFpsCap(parseInt(btn.dataset.fps));
     });
 
-    // Feature toggles
-    // e.preventDefault() stops the browser from activating the wrapped checkbox,
-    // which would re-fire a second click event and immediately undo the toggle.
     ["pose", "hand", "face", "outline"].forEach((feat) => {
       document.getElementById(`chip-${feat}`).addEventListener("click", (e) => {
         e.preventDefault();
@@ -511,7 +560,6 @@ class App {
       });
     });
 
-    // Outline strength slider
     const slider = document.getElementById("outline-strength");
     slider.addEventListener("input", () => this.setOutlineStrength(slider.value));
   }
