@@ -29,13 +29,15 @@ Browser camera
     ↓ JPEG frames at selected pipeline FPS (WebSocket binary)
 FastAPI /ws
     ↓
-4 daemon threads per session (VIDEO mode, capped at pipeline FPS):
-  seg_loop   → selfie segmenter alpha mask           (IMAGE mode, shared)
-  pose_loop  → 33 body landmarks + zone masks        (VIDEO mode, per-session)
+4 daemon threads per session (LIVE_STREAM mode, capped at pipeline FPS):
+  seg_loop   → selfie segmenter alpha mask           (IMAGE mode, shared singleton)
+               skipped entirely when preset="none" and outline=off
+  pose_loop  → 33 body landmarks + zone masks        (LIVE_STREAM, per-session)
                + Lucas-Kanade optical flow for low-visibility joints
-  hand_loop  → 21 landmarks × 2 hands + finger masks (VIDEO mode, per-session)
-  face_loop  → 468 face landmarks + face oval mask   (VIDEO mode, per-session)
-    ↓ each thread pushes landmark JSON directly to browser via asyncio (no frame wait)
+  hand_loop  → 21 landmarks × 2 hands + finger masks (LIVE_STREAM, per-session)
+  face_loop  → 468 face landmarks + face oval mask   (LIVE_STREAM, per-session)
+    ↓ detect_async() — non-blocking; callback fires on MediaPipe's thread
+      as soon as inference finishes, pushing landmark JSON directly to browser
 apply_bg(): merge all alphas → morph close → composite with background
     ↓ processed JPEG (binary) back to browser
 
@@ -52,11 +54,24 @@ Jitter and lag are reduced at three independent levels:
 
 | Layer | Where | What it does |
 |-------|-------|-------------|
-| **VIDEO mode** | MediaPipe model (server) | Temporal tracking between frames — model reuses previous detection instead of re-detecting every frame; built-in landmark smoothing |
+| **LIVE_STREAM mode** | MediaPipe model (server) | Temporal tracking between frames — model reuses previous detection instead of re-detecting every frame; built-in landmark smoothing |
 | **Optical flow** | `loops.py` (server) | Lucas-Kanade flow for low-visibility pose joints (e.g. feet, wrists) to keep them stable when partially occluded |
-| **Adaptive exp blend** | `app.js` (browser) | Per-landmark `α = exp(−d²/σ)` applied every rAF tick — tiny movements heavily favour the smoothed position (stable), large movements snap to fresh detection (responsive) |
+| **Per-body-part adaptive exp blend** | `app.js` (browser) | Per-landmark `α = exp(−d²/σ)` applied every rAF tick — sigma tuned per body part so fast-moving parts (hands, feet) snap to fresh detections while stable parts (head, torso) hold steady |
 
 The client-side blend runs at 60 fps regardless of server update rate, so motion looks smooth even at low pipeline FPS settings.
+
+### Per-body-part sigma values
+
+| Body part | Sigma | Behaviour |
+|-----------|-------|-----------|
+| Feet (29–32) | `1.5e-4` | Snappiest — feet move fast |
+| Wrists / hand tips (15–22) | `2e-4` | Very responsive |
+| Elbows / ankles (13–14, 27–28) | `3e-4` | Responsive |
+| Knees (25–26) | `5e-4` | Medium |
+| Shoulders / hips (11–12, 23–24) | `7e-4` | Stable |
+| Face landmarks / head (0–10) | `8e-4` | Most stable |
+| Hands | `1.5e-4` | Very snappy |
+| Face mesh | `8e-4` | Stable |
 
 ## Threading model
 
@@ -67,17 +82,25 @@ asyncio event loop (main thread)
                                 │  apply_bg() → loops.submit(frame)
                                 │                    │
                                 │             4 daemon threads
-                                │             (inference runs here, VIDEO mode)
+                                │             (LIVE_STREAM mode)
                                 │                    │
-                                │             _push_landmarks()
+                                │             detect_async() ← non-blocking
+                                │             returns immediately
+                                │                    │
+                                │             MediaPipe callback thread
+                                │             fires when inference finishes
+                                │             → _push_landmarks()
                                 │             asyncio.run_coroutine_threadsafe
                                 │             → sends JSON directly to browser
-                                │             as soon as inference finishes
                                 │
                                 └─► ws.send_bytes(composited JPEG)
 ```
 
-Landmark JSON is pushed **immediately** when each inference thread finishes — it does not wait for the next composited frame response. This minimises the visible lag between body movement and skeleton movement.
+Landmark JSON is pushed **immediately** when each inference callback fires — it does not wait for the next composited frame response. This minimises the visible lag between body movement and skeleton movement.
+
+### Segmenter CPU optimisation
+
+The selfie segmenter is skipped entirely when the background preset is "None" and the glow outline is off — in that mode its result would be thrown away anyway. This frees significant CPU for the landmark models, reducing lag when no background replacement is active.
 
 ## Project structure
 
@@ -87,19 +110,20 @@ Landmark JSON is pushed **immediately** when each inference thread finishes — 
 │   ├── app/
 │   │   ├── main.py        # FastAPI app, WebSocket endpoint
 │   │   ├── composite.py   # apply_bg() — alpha merge and pixel composite
-│   │   ├── loops.py       # per-session daemon inference threads (VIDEO mode)
-│   │   ├── infer.py       # per-model inference wrappers (detect_for_video)
+│   │   ├── loops.py       # per-session daemon inference threads (LIVE_STREAM)
+│   │   ├── infer.py       # per-model result processors (called from callbacks)
 │   │   ├── alpha.py       # mask builders (hand, face, segmenter)
 │   │   ├── zones.py       # 8 body-part zone masks (parallel)
 │   │   ├── build.py       # background layer builder
 │   │   ├── session.py     # per-connection state dataclass
-│   │   ├── models.py      # segmenter singleton + per-session VIDEO-mode factories
+│   │   ├── models.py      # segmenter singleton + LIVE_STREAM per-session factories
 │   │   └── config.py      # model URLs/paths, landmark tables, constants
 │   └── requirements.txt
 ├── frontend/
 │   ├── index.html          # 3-panel layout + FPS cap + latency controls
 │   ├── css/style.css
-│   └── js/app.js           # camera capture, WS comms, adaptive landmark smoothing
+│   └── js/app.js           # camera capture, WS comms, per-body-part adaptive smoothing
+├── TROUBLESHOOTING.txt     # common issues: caching, port conflicts, kill commands
 └── render.yaml             # Render free tier deploy config
                             # models/ is created at runtime and should be gitignored
 ```
@@ -117,20 +141,16 @@ Landmark JSON is pushed **immediately** when each inference thread finishes — 
 **1. Clone the repo**
 
 ```bash
-git clone <your-repo-url>
-cd Mediapipe_Background_Change_Landmarks
+git clone https://github.com/AngeloJamesRomerosa/Mediapipe_Segmenter_Landmarker.git
+cd Mediapipe_Segmenter_Landmarker
 ```
 
 **2. Create and activate a virtual environment**
 
-```bash
+```powershell
 # Windows (PowerShell)
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-
-# macOS / Linux
-python -m venv .venv
-source .venv/bin/activate
 ```
 
 > If PowerShell blocks the activation script, run this once first:
@@ -138,23 +158,14 @@ source .venv/bin/activate
 
 **3. Install dependencies**
 
-```bash
+```powershell
 pip install -r backend/requirements.txt
 ```
 
-This installs FastAPI, MediaPipe, OpenCV, uvicorn, and everything else needed. It may take a minute.
-
 **4. Start the server**
 
-```bash
+```powershell
 uvicorn backend.app.main:app --reload
-```
-
-You should see output like:
-
-```
-INFO     MediaPipe BG server ready.
-INFO     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 ```
 
 **5. Open in browser**
@@ -165,18 +176,22 @@ The first time each model is used it downloads from Google's MediaPipe CDN (~30 
 
 ### Stopping the server
 
-Press **Ctrl+C** in the terminal.
+Press **Ctrl+C** in the terminal, or if the process is stuck run this in any PowerShell window:
+
+```powershell
+Get-Process -Name "python*" -ErrorAction SilentlyContinue | Stop-Process -Force
+```
 
 ### Model download notes
 
 | Model | Running mode | Downloaded when | Size |
 |-------|-------------|-----------------|------|
-| Selfie segmenter | IMAGE (shared singleton) | First camera frame | ~1 MB |
-| Pose landmarker | VIDEO (per-session) | Session start | ~5 MB |
-| Hand landmarker | VIDEO (per-session) | Session start | ~9 MB |
-| Face landmarker | VIDEO (per-session) | Session start (pre-warms) | ~14 MB |
+| Selfie segmenter | IMAGE — shared singleton | First frame with background/outline active | ~1 MB |
+| Pose landmarker | LIVE_STREAM — per-session | Session start | ~5 MB |
+| Hand landmarker | LIVE_STREAM — per-session | Session start | ~9 MB |
+| Face landmarker | LIVE_STREAM — per-session | Session start (pre-warms) | ~14 MB |
 
-Pose, Hand, and Face landmarkers use **VIDEO mode** — each session creates its own model instance so the temporal tracking state is not shared between users. The face model pre-warms in the background as soon as the camera starts.
+Pose, Hand, and Face landmarkers use **LIVE_STREAM mode** — each session creates its own model instance. `detect_async()` is non-blocking; results arrive via a callback on MediaPipe's internal thread the moment inference finishes, decoupling the inference wait from the loop thread.
 
 ## Deploying to Render
 
@@ -196,7 +211,7 @@ All communication happens over a single `ws://<host>/ws` connection per browser 
 | Client → Server | binary | Raw JPEG camera frame |
 | Client → Server | text JSON | Config message (see below) |
 | Server → Client | binary | Processed JPEG frame |
-| Server → Client | text JSON | `{"type":"landmarks", pose:[...], hands:[...], face:[...]}` pushed directly by inference threads |
+| Server → Client | text JSON | `{"type":"landmarks", pose:[...], hands:[...], face:[...]}` pushed directly by inference callbacks |
 
 ### Config messages
 
@@ -222,9 +237,9 @@ All communication happens over a single `ws://<host>/ws` connection per browser 
 | Model | Task | Mode | Size |
 |-------|------|------|------|
 | `selfie_segmenter.tflite` | Person alpha mask | IMAGE — shared singleton | ~1 MB |
-| `pose_landmarker_lite.task` | 33 body landmarks + segmentation | VIDEO — per-session | ~5 MB |
-| `hand_landmarker.task` | 21 landmarks × 2 hands | VIDEO — per-session | ~9 MB |
-| `face_landmarker.task` | 468 face landmarks | VIDEO — per-session | ~14 MB |
+| `pose_landmarker_lite.task` | 33 body landmarks + segmentation | LIVE_STREAM — per-session | ~5 MB |
+| `hand_landmarker.task` | 21 landmarks × 2 hands | LIVE_STREAM — per-session | ~9 MB |
+| `face_landmarker.task` | 468 face landmarks | LIVE_STREAM — per-session | ~14 MB |
 
 ## Configuration
 
@@ -232,11 +247,13 @@ All communication happens over a single `ws://<host>/ws` connection per browser 
 |----------|------|---------|-------------|
 | `INFER_MAX_W` | `config.py` | `480` | Max width for inference (frame is downscaled before sending to models) |
 | `BLUR_RADIUS` | `config.py` | `21` | Gaussian blur kernel size for blur background preset |
-| `SIGMA` | `app.js` | `5e-4` | Adaptive smoothing sensitivity — lower = snappier, higher = smoother |
+| `POSE_SIGMA` | `app.js` | see table above | Per-landmark adaptive smoothing — smaller = snappier |
+| `HAND_SIGMA` | `app.js` | `1.5e-4` | Hand landmark smoothing — very responsive |
+| `FACE_SIGMA` | `app.js` | `8e-4` | Face mesh smoothing — stable |
 
-## Gitignore suggestion
+## Gitignore
 
-Add this to `.gitignore` to avoid committing the downloaded models:
+The following are excluded from the repo and created at runtime:
 
 ```
 models/
