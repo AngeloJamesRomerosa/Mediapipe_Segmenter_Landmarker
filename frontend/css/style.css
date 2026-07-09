@@ -1,0 +1,327 @@
+/* ── Reset & base ─────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #0d0d14;
+  --surface:  #16161f;
+  --surface2: #1e1e2a;
+  --border:   #2a2a3a;
+  --accent:   #7ec8e3;
+  --text:     #e2e8f0;
+  --muted:    #64748b;
+  --green:    #4ade80;
+  --red:      #f87171;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+header h1 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.01em;
+}
+
+#status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+/* ── Start / Stop button ─────────────────────────────────────────────────── */
+#start-stop-btn {
+  padding: 5px 14px;
+  border-radius: 6px;
+  border: 1px solid;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+#start-stop-btn.stop {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: var(--red);
+  color: var(--red);
+}
+
+#start-stop-btn.stop:hover  { background: rgba(248, 113, 113, 0.22); }
+
+#start-stop-btn.start {
+  background: rgba(74, 222, 128, 0.12);
+  border-color: var(--green);
+  color: var(--green);
+}
+
+#start-stop-btn.start:hover { background: rgba(74, 222, 128, 0.22); }
+
+/* ── Status dot ──────────────────────────────────────────────────────────── */
+#status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+  transition: background 0.3s;
+  flex-shrink: 0;
+}
+
+#status-dot.connected { background: var(--green); }
+#fps-display     { font-variant-numeric: tabular-nums; min-width: 52px; }
+#latency-display { font-variant-numeric: tabular-nums; min-width: 42px; }
+
+/* ── Main layout ─────────────────────────────────────────────────────────── */
+main {
+  flex: 1;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* ── Three video panels ───────────────────────────────────────────────────── */
+.video-panels {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-header {
+  padding: 6px 12px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.panel-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--accent);
+  font-size: 0.65rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+#camera, #landmarks, #output {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #000;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+}
+
+/* ── Controls ─────────────────────────────────────────────────────────────── */
+.controls {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.control-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.label-note {
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.7;
+  font-weight: 400;
+}
+
+/* ── Preset buttons ───────────────────────────────────────────────────────── */
+.preset-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.preset-btn {
+  padding: 5px 11px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.82rem;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.preset-btn:hover  { background: #252532; border-color: #444; }
+.preset-btn.active { background: #172033; border-color: var(--accent); color: var(--accent); }
+
+/* Image label inherits .preset-btn; needs flex for alignment */
+label.preset-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── FPS cap buttons (same look as preset buttons) ───────────────────────── */
+.fps-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.fps-btn {
+  padding: 5px 11px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.82rem;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.fps-btn:hover  { background: #252532; border-color: #444; }
+.fps-btn.active { background: #172033; border-color: var(--accent); color: var(--accent); }
+
+/* ── Toggle chips ─────────────────────────────────────────────────────────── */
+.toggle-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.toggle-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--text);
+  user-select: none;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.toggle-chip input[type="checkbox"] { display: none; }
+
+.toggle-chip .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.toggle-chip.on { border-color: var(--accent); color: var(--accent); }
+.toggle-chip.on .dot { background: var(--accent); }
+
+/* ── Outline strength ─────────────────────────────────────────────────────── */
+.strength-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.strength-label { font-size: 0.75rem; color: var(--muted); }
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 110px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: none;
+}
+
+.strength-val {
+  font-size: 0.8rem;
+  color: var(--muted);
+  min-width: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .video-panels { grid-template-columns: 1fr 1fr; }
+  .video-panels .panel:last-child { grid-column: 1 / -1; }
+}
+
+@media (max-width: 560px) {
+  .video-panels { grid-template-columns: 1fr; }
+  .video-panels .panel:last-child { grid-column: auto; }
+  .controls { gap: 14px; }
+  header h1 { font-size: 0.9rem; }
+}

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MediaPipe BG &amp; Landmarks</title>
+  <link rel="stylesheet" href="css/style.css?v=20260709" />
+</head>
+<body>
+
+<header>
+  <h1>MediaPipe Background &amp; Landmarks</h1>
+  <div id="status-bar">
+    <button id="start-stop-btn" class="start">Start</button>
+    <span id="status-dot"></span>
+    <span id="status-text">Connecting…</span>
+    <span id="fps-display">— fps</span>
+    <span id="latency-display">— ms</span>
+  </div>
+</header>
+
+<main>
+  <!-- Three video panels -->
+  <div class="video-panels">
+
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-num">1</span> Original
+      </div>
+      <video id="camera" autoplay playsinline muted></video>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-num">2</span> Landmarks
+      </div>
+      <canvas id="landmarks"></canvas>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-num">3</span> Background + Crop
+      </div>
+      <canvas id="output"></canvas>
+    </div>
+
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+
+    <!-- Background presets -->
+    <div class="control-group">
+      <div class="control-label">Background <span class="label-note">(panel 3)</span></div>
+      <div class="preset-row" id="preset-row">
+        <button class="preset-btn active" data-preset="none">None</button>
+        <button class="preset-btn" data-preset="blur">Blur</button>
+        <button class="preset-btn" data-preset="black">Black</button>
+        <button class="preset-btn" data-preset="white">White</button>
+        <button class="preset-btn" data-preset="green">Green</button>
+        <label class="preset-btn" id="img-preset-btn">
+          Image
+          <input type="file" id="bg-file" accept="image/*" style="display:none" />
+        </label>
+      </div>
+    </div>
+
+    <!-- Feature toggles -->
+    <div class="control-group">
+      <div class="control-label">Landmarks <span class="label-note">(panels 2 &amp; 3)</span></div>
+      <div class="toggle-row">
+        <label class="toggle-chip on" id="chip-pose">
+          <input type="checkbox" checked />
+          <span class="dot"></span>
+          Pose
+        </label>
+        <label class="toggle-chip on" id="chip-hand">
+          <input type="checkbox" checked />
+          <span class="dot"></span>
+          Hand
+        </label>
+        <label class="toggle-chip" id="chip-face">
+          <input type="checkbox" />
+          <span class="dot"></span>
+          Face
+        </label>
+      </div>
+    </div>
+
+    <!-- Pipeline FPS cap -->
+    <div class="control-group">
+      <div class="control-label">Pipeline FPS <span class="label-note">(capture + inference)</span></div>
+      <div class="fps-row" id="fps-row">
+        <button class="fps-btn" data-fps="5">5</button>
+        <button class="fps-btn" data-fps="10">10</button>
+        <button class="fps-btn" data-fps="15">15</button>
+        <button class="fps-btn" data-fps="20">20</button>
+        <button class="fps-btn active" data-fps="30">30</button>
+        <button class="fps-btn" data-fps="0">MAX</button>
+      </div>
+    </div>
+
+    <!-- Outline -->
+    <div class="control-group">
+      <div class="control-label">Outline <span class="label-note">(panel 3)</span></div>
+      <div class="toggle-row">
+        <label class="toggle-chip" id="chip-outline">
+          <input type="checkbox" />
+          <span class="dot"></span>
+          Glow
+        </label>
+      </div>
+      <div class="strength-row">
+        <span class="strength-label">Strength</span>
+        <input type="range" id="outline-strength" min="0" max="1" step="0.05" value="0.5" />
+        <span class="strength-val" id="strength-val">0.5</span>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script src="js/app.js?v=20260709"></script>
+</body>
+</html>

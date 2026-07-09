@@ -1,0 +1,77 @@
+TROUBLESHOOTING
+===============
+
+
+PROBLEM: Browser keeps loading cached version of the app (JS/CSS changes not reflected)
+-----------------------------------------------------------------------------------------
+
+SYMPTOMS:
+- You edit app.js or style.css but refreshing the browser shows the old version
+- DevTools Network tab shows "(memory cache)" or "(disk cache)" next to the files
+- Changes seem to be "saved" but nothing happens in the browser
+
+ROOT CAUSE:
+Chrome aggressively caches JS and CSS files for localhost. Even "Disable cache" in
+DevTools does not always clear the in-memory cache from the current session.
+
+FIXES (in order of reliability):
+
+1. Hard reload with cache clear (quickest):
+   - Right-click the browser refresh button → "Empty Cache and Hard Reload"
+   - OR: Open DevTools (F12) → right-click refresh button → "Empty Cache and Hard Reload"
+
+2. Cache-busting query strings (permanent fix — already applied):
+   - index.html references assets as:
+       css/style.css?v=20260709
+       js/app.js?v=20260709
+   - The browser treats ?v=... as a different URL, bypassing any cached version.
+   - If caching becomes a problem again, bump the version number in index.html, e.g.:
+       css/style.css?v=20260710
+
+3. Server-side no-cache headers (already applied):
+   - main.py serves index.html, app.js, and style.css via explicit FileResponse routes
+     with headers={"Cache-Control": "no-store"} before the StaticFiles catch-all.
+   - This tells the browser never to store these files.
+
+
+PROBLEM: Server is still running on port 8000 / cannot stop it with Ctrl+C
+----------------------------------------------------------------------------
+
+SYMPTOMS:
+- You pressed Ctrl+C but the browser can still reach localhost:8000
+- netstat shows something still LISTENING on port 8000
+- taskkill or Stop-Process by PID says "process not found" but port is still occupied
+
+ROOT CAUSE:
+The PID reported by netstat may already be dying or recycled by the time you try to
+kill it. Targeting the port's PID directly is unreliable in this state.
+
+FIX — kill by process name instead (always works):
+
+   Open any PowerShell window and run:
+
+       Get-Process -Name "python*" -ErrorAction SilentlyContinue | Stop-Process -Force
+
+   This kills the uvicorn/Python process directly. Port 8000 will be clear within ~1 second.
+   The TIME_WAIT entries that remain in netstat are harmless — the OS cleans them up automatically.
+
+VERIFY port is clear:
+
+       netstat -ano | findstr ":8000"
+
+   Once you only see TIME_WAIT lines (or nothing), the port is free.
+
+
+STARTING THE SERVER
+-------------------
+
+Always activate the virtual environment first, then start uvicorn:
+
+   PowerShell:
+       .\.venv\Scripts\Activate.ps1
+       uvicorn backend.app.main:app --reload
+
+   If PowerShell blocks the activation script, run this once:
+       Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+   Then open: http://localhost:8000
